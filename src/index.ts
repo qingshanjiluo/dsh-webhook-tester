@@ -1,0 +1,244 @@
+import { z } from 'zod';
+import http from 'node:http';
+import { randomUUID } from 'node:crypto';
+
+const configSchema = z.object({
+  enabled: z.boolean().default(true),
+  port: z.number().int().min(1024).max(65535).default(5678),
+  maxLogs: z.number().int().min(1).max(10000).default(100),
+});
+
+interface Webhook {
+  id: string;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: unknown;
+  receivedAt: string;
+  source: string;
+}
+
+let server: http.Server | null = null;
+let webhooks: Webhook[] = [];
+let maxLogs = 100;
+
+function startServer(port: number): string {
+  if (server) {
+    stopServer();
+  }
+
+  server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const bodyRaw = Buffer.concat(chunks).toString('utf-8');
+      let body: unknown;
+      try {
+        body = JSON.parse(bodyRaw);
+      } catch {
+        body = bodyRaw;
+      }
+
+      const webhook: Webhook = {
+        id: randomUUID(),
+        method: req.method ?? 'GET',
+        url: req.url ?? '/',
+        headers: req.headers as Record<string, string>,
+        body,
+        receivedAt: new Date().toISOString(),
+        source: req.socket.remoteAddress ?? 'unknown',
+      };
+
+      webhooks.push(webhook);
+      if (webhooks.length > maxLogs) {
+        webhooks = webhooks.slice(-maxLogs);
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, id: webhook.id }));
+    });
+  });
+
+  server.listen(port);
+  return `http://localhost:${port}`;
+}
+
+function stopServer(): void {
+  if (server) {
+    server.close();
+    server = null;
+  }
+}
+
+function getReceivedWebhooks(): Webhook[] {
+  return [...webhooks];
+}
+
+function clearWebhooks(): void {
+  webhooks = [];
+}
+
+function replayWebhook(id: string, targetUrl: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const wh = webhooks.find((w) => w.id === id);
+    if (!wh) {
+      return reject(new Error(`Webhook ${id} not found`));
+    }
+
+    const url = new URL(targetUrl);
+    const bodyStr = typeof wh.body === 'string' ? wh.body : JSON.stringify(wh.body);
+
+    const req = http.request(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        method: wh.method,
+        headers: wh.headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString('utf-8'),
+          });
+        });
+      }
+    );
+
+    req.on('error', reject);
+    req.write(bodyStr);
+    req.end();
+  });
+}
+
+function generateCurlCommand(webhook: Webhook): string {
+  const parts = ['curl', `-X ${webhook.method}`];
+  for (const [key, value] of Object.entries(webhook.headers)) {
+    parts.push(`-H '${key}: ${value}'`);
+  }
+  const bodyStr = typeof webhook.body === 'string' ? webhook.body : JSON.stringify(webhook.body);
+  if (bodyStr) {
+    parts.push(`-d '${bodyStr}'`);
+  }
+  parts.push(`'REPLACE_WITH_URL'`);
+  return parts.join(' ');
+}
+
+export default {
+  name: 'dsh-webhook-tester',
+  inject: ['settings', 'tools', 'commands'] as const,
+  config: configSchema,
+  register(ctx) {
+    const { settings, tools, commands } = ctx;
+    const cfg = settings.get('dsh-webhook-tester');
+    maxLogs = cfg.maxLogs;
+
+    if (cfg.enabled && cfg.port) {
+      startServer(cfg.port);
+    }
+
+    tools.register({
+      name: 'webhook_start',
+      description: 'Start webhook receiver server on specified port',
+      parameters: z.object({
+        port: z.number().int().min(1024).max(65535).optional(),
+      }),
+      async execute(params) {
+        const p = params.port ?? cfg.port;
+        const url = startServer(p);
+        return { server_url: url, message: `Webhook receiver listening on ${url}` };
+      },
+    });
+
+    tools.register({
+      name: 'webhook_stop',
+      description: 'Stop the receiver server',
+      parameters: z.object({}),
+      async execute() {
+        stopServer();
+        return { message: 'Webhook receiver stopped' };
+      },
+    });
+
+    tools.register({
+      name: 'webhook_list',
+      description: 'List all received webhooks',
+      parameters: z.object({}),
+      async execute() {
+        return { webhooks: getReceivedWebhooks(), count: webhooks.length };
+      },
+    });
+
+    tools.register({
+      name: 'webhook_replay',
+      description: 'Replay a received webhook to a target URL',
+      parameters: z.object({
+        id: z.string(),
+        target_url: z.string().url(),
+      }),
+      async execute(params) {
+        const result = await replayWebhook(params.id, params.target_url);
+        return { status: result.status, body: result.body };
+      },
+    });
+
+    tools.register({
+      name: 'webhook_inspect',
+      description: 'Inspect a specific webhook full details',
+      parameters: z.object({
+        id: z.string(),
+      }),
+      async execute(params) {
+        const wh = webhooks.find((w) => w.id === params.id);
+        if (!wh) {
+          return { error: `Webhook ${params.id} not found` };
+        }
+        return {
+          webhook: wh,
+          curl: generateCurlCommand(wh),
+        };
+      },
+    });
+
+    tools.register({
+      name: 'webhook_clear',
+      description: 'Clear all received webhooks',
+      parameters: z.object({}),
+      async execute() {
+        clearWebhooks();
+        return { message: 'All webhooks cleared' };
+      },
+    });
+
+    commands.register({
+      name: '/webhook',
+      description: 'Manage webhook receiver: start, stop, list, clear',
+      async execute(args) {
+        const [action, ...rest] = args;
+        switch (action) {
+          case 'start': {
+            const port = rest[0] ? Number(rest[0]) : cfg.port;
+            const url = startServer(port);
+            return `Webhook receiver started on ${url}`;
+          }
+          case 'stop':
+            stopServer();
+            return 'Webhook receiver stopped';
+          case 'list': {
+            const list = getReceivedWebhooks();
+            if (list.length === 0) return 'No webhooks received yet.';
+            return list.map((w) => `${w.id} ${w.method} ${w.url} ${w.receivedAt}`).join('\n');
+          }
+          case 'clear':
+            clearWebhooks();
+            return 'All webhooks cleared';
+          default:
+            return 'Usage: /webhook <start|stop|list|clear> [port]';
+        }
+      },
+    });
+  },
+};

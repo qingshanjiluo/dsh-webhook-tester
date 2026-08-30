@@ -1,0 +1,14 @@
+{
+  "name": "dsh-webhook-tester",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness Webhook 测试器 — 生成 URL、接收、重放、日志",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": { ".": "./lib/index.js", "./client": "./lib/client.js", "./cordis.patch.yml": "./cordis.patch.yml", "./package.json": "./package.json" },
+  "scripts": { "build": "tsdown", "typecheck": "tsc --noEmit" },
+  "keywords": ["deepseek-harness", "dsh-plugin", "webhook", "testing", "http"],
+  "license": "MIT",
+  "peerDependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-tools": "*", "@deepseek-ai/dsh-client-runtime": "*", "@deepseek-ai/dsh-client-locale": "*", "@deepseek-ai/dsh-client-ui-settings": "*" },
+  "devDependencies": { "typescript": "^5.5.0", "tsdown": "^0.11.0" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-client-locale", "@deepseek-ai/dsh-client-ui-settings"] } }
+}

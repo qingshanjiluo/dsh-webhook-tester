@@ -1,0 +1,5 @@
+- insert:
+    - id: webhook-tester
+      name: dsh-webhook-tester
+      config:
+        enabled: true
