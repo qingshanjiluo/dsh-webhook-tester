@@ -1,3 +1,15 @@
+/**
+ * dsh-webhook-tester — Webhook测试器
+ *
+ * 功能：
+ * 1. Webhook接收
+ * 2. Webhook重放
+ * 3. 日志管理
+ *
+ * 工具：webhook_start, webhook_stop, webhook_list, webhook_replay, webhook_inspect, webhook_clear
+ * 命令：/webhook
+ * 配置：enabled, port
+ */
 import { z } from 'zod';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
