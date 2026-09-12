@@ -1,5 +1,10 @@
+# dsh-webhook-tester bundle layer: inserts the host tool plugin into a profile's
+# layer stack. Install with:
+#   npx -y @deepseek-ai/dsh plugin --profile web add @qingshanjiluo/dsh-webhook-tester
 - insert:
     - id: webhook-tester
-      name: dsh-webhook-tester
+      name: '@qingshanjiluo/dsh-webhook-tester'
       config:
-        enabled: true
+        sampleUrl: http://127.0.0.1:3080/api/webhooks/github
+        signingSecret: ''
+        defaultToleranceSeconds: 300
